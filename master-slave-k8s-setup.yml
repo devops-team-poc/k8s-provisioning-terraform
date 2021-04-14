@@ -1,0 +1,170 @@
+---
+- hosts: all
+  tasks:
+    # Install Docker and its dependent components
+    - name: Install packages that allow apt to be used over HTTPS
+      apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+      vars:
+        packages:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg-agent
+          - software-properties-common
+
+    - name: Add an apt signing key for Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add apt repository for stable version
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Install docker and its dependecies
+      apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+      vars:
+        packages:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+      notify:
+        - docker status
+
+    # change Docker driver from cgroupfs to systemd
+    - name: add file to change docker driver
+      copy:
+        content: '{ "exec-opts": ["native.cgroupdriver=systemd"] }'
+        dest: /etc/docker/daemon.json
+
+    - name: Restart docker service and reload daemon
+      ansible.builtin.systemd:
+        state: restarted
+        daemon_reload: yes
+        name: docker
+
+    # Kubelet will not start if the system has swap enabled, so we are disabling swap
+    - name: Remove swapfile from /etc/fstab
+      mount:
+        name: "{{ item }}"
+        fstype: swap
+        state: absent
+      with_items:
+        - swap
+        - none
+
+    - name: Disable swap
+      command: swapoff -a
+      when: ansible_swaptotal_mb > 0
+
+    # Installing kubelet, kubeadm and kubectl
+    - name: Add an apt signing key for Kubernetes
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - name: Adding apt repository for Kubernetes
+      apt_repository:
+        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        filename: kubernetes.list
+
+    - name: Install Kubernetes binaries
+      apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+      vars:
+        packages:
+          - kubelet
+          - kubeadm
+          - kubectl
+
+    - name: Restart kubelet
+      service:
+        name: kubelet
+        daemon_reload: yes
+        state: restarted
+
+  # Setup a handler for checking Docker daemon
+  handlers:
+    - name: docker status
+      service: name=docker state=started
+
+- hosts: tag_Name_master
+  tasks:
+    - name: gather ec2_facts
+      ec2_metadata_facts:
+      tags: master, replace
+
+    # Initialize the Kubernetes cluster with kubeadm on master node
+    - name: Initialize the Kubernetes cluster using kubeadm
+      command: kubeadm init --apiserver-cert-extra-sans={{ ansible_ec2_public_ipv4 }} --pod-network-cidr="10.10.0.0/16"
+      tags: master
+
+    # Setup the kube config file for the k8s user to access the Kubernetes cluster
+    - name: Setup kubeconfig for k8s user
+      command: "{{ item }}"
+      with_items:
+        - mkdir -p /root/.kube
+        - cp -i /etc/kubernetes/admin.conf /root/.kube/config
+        - chown root:root /root/.kube/config
+      tags: master
+
+    # Setup the container networking provider and the network policy engine
+    - name: Install flannel pod network
+      command: kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+      tags: master
+
+    # Generate kube join command for joining the node to the Kubernetes cluster and store the command in the file named join-command
+    - name: Generate join command
+      command: kubeadm token create --print-join-command
+      register: join_command
+      tags: run, master
+
+    # copy join command to local file
+    - name: Copy join command to local file
+      become_user: arix
+      local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
+      tags: run, master
+
+    - name: register config file in variable
+      command: cat /root/.kube/config
+      register: config_file
+      tags: run, master
+
+    - name: copy .kube/config file to local file
+      become_user: arix
+      local_action: copy content="{{ config_file.stdout }}" dest="./config"
+      tags: run, master
+
+    - name: replace private ip with public ip in config file
+      become_user: arix
+      local_action:
+        module: replace
+        path: ./config
+        regexp: "{{ ansible_default_ipv4.address }}"
+        replace: "{{ ansible_ec2_public_ipv4 }}"
+        backup: yes
+      tags: replace
+
+- hosts: tag_Name_slave1, tag_Name_slave2
+  tasks:
+    # Join the nodes to the Kubernetes cluster
+    - name: Copy the join command to server location
+      copy:
+        src: join-command
+        dest: /tmp/join-command.sh
+        mode: 0777
+      tags: slave
+
+    - name: Join the node to cluster
+      command: sh /tmp/join-command.sh
+      tags: slave

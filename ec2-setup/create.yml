@@ -1,0 +1,34 @@
+---
+- hosts: localhost
+  vars_files:
+    - vars/var.yml
+  tasks:
+    - name: Create directory to store tf file
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ tf_state_dir }}"
+        - "{{ tf_infra_dir }}"
+ 
+    - name: Copy tf templates in {{ tf_state_dir }} and {{ tf_infra_dir }}
+      template:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      loop:
+        - { src: "templates/state.tf", dest: "{{ tf_state_dir }}/" }
+        - { src: "templates/ec2.tf", dest: "{{ tf_infra_dir }}/" }
+
+    - name: Deploy tf config on AWS from Ansible.
+      terraform:
+        project_path: "{{ item }}/"
+        force_init: yes
+        state: present
+      loop:
+        - "{{ tf_state_dir }}"
+        - "{{ tf_infra_dir }}"
+      register: state
+
+    - name: Print state of AWS Resource.
+      debug:
+        msg: "{{ state }}"

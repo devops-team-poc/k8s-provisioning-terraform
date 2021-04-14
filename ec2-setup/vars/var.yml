@@ -1,0 +1,15 @@
+---
+# Variables for AWS Instance
+
+sg_id: "sg-03a168289cd95fbc0"
+ami_id: "ami-0d758c1134823146a"
+region: "ap-south-1"
+key_name: "key"
+bucket_name: "tfstate-ap-south-1"
+tf_state_dir: "tfstate"
+tf_infra_dir: "tfinfra"
+instance_name: "instance"
+instance_type: "t2.medium"
+dynamodb_table: "tf-locks"
+availability_zone: "ap-south-1a"
+instance_count: "3"

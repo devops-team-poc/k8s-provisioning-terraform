@@ -1,0 +1,25 @@
+---
+- hosts: localhost
+  vars_files:
+    - vars/var.yml
+  tasks:
+    - name: Destroy Environment
+      terraform:
+        project_path: "{{ item }}/"
+        state: absent
+      loop:
+        - "{{ tf_infra_dir }}"
+        - "{{ tf_state_dir }}"
+      register: state
+
+    - name: Delete directory
+      file:
+        path: "{{ item }}/"
+        state: absent
+      loop:
+        - "{{ tf_infra_dir }}"
+        - "{{ tf_state_dir }}"
+
+    - name: Print state of resources.
+      debug:
+        msg: "{{ state }}"
